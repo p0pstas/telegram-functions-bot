@@ -56,6 +56,23 @@ export class SshCommandClient extends AIFunctionsProvider {
     const tempFile = tmp.fileSync({ mode: 0o755, prefix: 'ssh_command-', postfix: '.sh' });
     writeFileSync(tempFile.name, cmd);
 
+    const remoteTempFile = `/tmp/${tempFile.name.split('/').pop()}`;
+
+    const scpCmd = `scp -o "StrictHostKeyChecking no" -o "UserKnownHostsFile /dev/null" -o "LogLevel ERROR" -o "ConnectTimeout 10" -o "ServerAliveInterval 60" -o "ServerAliveCountMax 3" -o "BatchMode yes" -o "PasswordAuthentication no" -o "PreferredAuthentications publickey" -o "IdentityFile ~/.ssh/id_rsa" ${tempFile.name} ${user}@${host}:${remoteTempFile}`;
+    await new Promise((resolve, reject) => {
+      exec(scpCmd, (error, stdout, stderr) => {
+        if (error) {
+          console.error(`error: ${error.message}`);
+          reject(error.message);
+        }
+        if (stderr) {
+          console.error(`stderr: ${stderr}`);
+          reject(stderr);
+        }
+        resolve(stdout);
+      });
+    });
+
     const cmdArgs = [
       '-o "StrictHostKeyChecking no"',
       '-o "UserKnownHostsFile /dev/null"',
@@ -69,7 +86,7 @@ export class SshCommandClient extends AIFunctionsProvider {
       '-o "IdentityFile ~/.ssh/id_rsa"',
       `-o "User ${user}"`,
       host,
-      `"bash ${tempFile.name}"`
+      `"bash ${remoteTempFile}"`
     ];
     const cmdStr = `ssh ${cmdArgs.join(' ')}`;
     const args = {command: cmd};
