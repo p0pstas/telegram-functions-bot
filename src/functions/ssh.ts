@@ -6,6 +6,8 @@ import {z} from 'zod'
 import {readConfig} from '../config.ts'
 import {ConfigChatType, ConfigType, ToolResponse} from "../types.ts";
 import {exec} from "child_process";
+import { writeFileSync, unlinkSync, readFileSync } from 'fs';
+import * as tmp from 'tmp';
 
 type ToolArgsType = {
   command: string
@@ -51,6 +53,26 @@ export class SshCommandClient extends AIFunctionsProvider {
     const host = this.configChat.options?.ssh?.host || 'localhost'
     const user = this.configChat.options?.ssh?.user || 'root'
 
+    const tempFile = tmp.fileSync({ mode: 0o755, prefix: 'ssh_command-', postfix: '.sh' });
+    writeFileSync(tempFile.name, cmd);
+
+    const remoteTempFile = `/tmp/${tempFile.name.split('/').pop()}`;
+
+    const scpCmd = `scp -o "StrictHostKeyChecking no" -o "UserKnownHostsFile /dev/null" -o "LogLevel ERROR" -o "ConnectTimeout 10" -o "ServerAliveInterval 60" -o "ServerAliveCountMax 3" -o "BatchMode yes" -o "PasswordAuthentication no" -o "PreferredAuthentications publickey" -o "IdentityFile ~/.ssh/id_rsa" ${tempFile.name} ${user}@${host}:${remoteTempFile}`;
+    await new Promise((resolve, reject) => {
+      exec(scpCmd, (error, stdout, stderr) => {
+        if (error) {
+          console.error(`error: ${error.message}`);
+          reject(error.message);
+        }
+        if (stderr) {
+          console.error(`stderr: ${stderr}`);
+          reject(stderr);
+        }
+        resolve(stdout);
+      });
+    });
+
     const cmdArgs = [
       '-o "StrictHostKeyChecking no"',
       '-o "UserKnownHostsFile /dev/null"',
@@ -64,12 +86,15 @@ export class SshCommandClient extends AIFunctionsProvider {
       '-o "IdentityFile ~/.ssh/id_rsa"',
       `-o "User ${user}"`,
       host,
-      `"${cmd}"`
+      `"bash ${remoteTempFile}"`
     ];
     const cmdStr = `ssh ${cmdArgs.join(' ')}`;
     const args = {command: cmd};
     const res = await new Promise((resolve, reject) => {
       exec(cmdStr, (error, stdout, stderr) => {
+        unlinkSync(tempFile.name);
+        const cleanupCmd = `ssh ${cmdArgs.slice(0, -1).join(' ')} "rm ${remoteTempFile}"`;
+        exec(cleanupCmd, () => {});
         if (error) {
           console.error(`error: ${error.message}`);
           if (error.code) {
